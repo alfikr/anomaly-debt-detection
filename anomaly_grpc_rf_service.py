@@ -4,15 +4,20 @@ import os
 import debt_model_loader as dml
 import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import classification_report
 import joblib
 from redis_util import RedisUtil as ru
 import grpc
 from concurrent import futures
+import datetime
+from collections import Counter
 
 
 class AnomalyDetectorRf(anomaly_pb2_grpc.AnomalyServiceServicer):
     def __init__(self):
-        self.model_path="anomaly_model_rf_joblib"
+        self.model_dir = './models'
+        os.makedirs(self.model_dir,exist_ok=True)
+        self.model_path=os.path.join(self.model_dir,"anomaly_model_rf_joblib")
         self.csv_feedback_path="./feedback-labeled.csv"
         self._train_model()
     
@@ -26,10 +31,29 @@ class AnomalyDetectorRf(anomaly_pb2_grpc.AnomalyServiceServicer):
         else:
             all_data = base_data
 
-        self.model=RandomForestClassifier(n_estimators=100,random_state=42)
-        self.model.fit(all_data[['amount_due','amount_paid','delay_days','paid_to_due_ratio']],all_data['label'])
+        X=all_data[['amount_due','amount_paid','delay_days','paid_to_due_ratio']]
+        Y= all_data['label']
+
+        if len(set(Y)) < 2 :
+            print('class variety to train model is not enough yet need at least 2 classes')
+            self.model=RandomForestClassifier(n_estimators=100,random_state=42,min_samples_leaf=3,max_features='sqrt')
+
+        self.model=RandomForestClassifier(n_estimators=100,random_state=42,min_samples_leaf=3,max_features='sqrt')
+        self.model.fit(X,Y)
+
+        print('Model evaluation report :')
+        print('Label distribution : ',Counter(Y))
+        report = classification_report(Y,self.model.predict(X),zero_division=0)
+        print(report)
+
+        if Y.value_counts().min() < 5 :
+            print('Warning : imbalanced data, Consider collecting more feedback')
+
+        timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        versioning_path = os.path.join(self.model_dir,f"anomaly_model_rf_{timestamp}.joblib")
+        joblib.dump(self.model,versioning_path)
         joblib.dump(self.model,self.model_path)
-        print("Random Forest model trained and saved")
+        print(f"Random Forest model trained and saved : {versioning_path}")
 
     def Detect(self, request, context):
         redis_key = f"anomaly:feedback:{request.amount_due}:{request.amount_paid}:{request.delay_days}"
@@ -43,7 +67,7 @@ class AnomalyDetectorRf(anomaly_pb2_grpc.AnomalyServiceServicer):
             )
         
         cached_result = ru.get_data_redis(redis_key)
-        if cached_result and 'model_score' in cached_result and 'model_anomlay' in cached_result:
+        if cached_result and 'model_score' in cached_result and 'model_anomaly' in cached_result:
             return anomaly_pb2.AnomalyResponse(
                 anomaly_score=cached_result['model_score'],
                 is_anomaly=bool(cached_result['model_anomaly'])
@@ -81,12 +105,12 @@ class AnomalyDetectorRf(anomaly_pb2_grpc.AnomalyServiceServicer):
             "delay_days": request.delay_days,
             "paid_to_due_ratio": ratio,
             "model_score":probas,
-            "model_anomaly": prediction
+            "model_anomaly": int(prediction)
         })
 
         return anomaly_pb2.AnomalyResponse(
             anomaly_score=probas,
-            is_anomaly=prediction
+            is_anomaly=int(prediction)
         )
     
     def SubmitFeedback(self,request,context):
@@ -95,7 +119,7 @@ class AnomalyDetectorRf(anomaly_pb2_grpc.AnomalyServiceServicer):
             "amount_due":request.amount_due,
             "amount_paid": request.amount_paid,
             "delay_days": request.delay_days,
-            "user_label": request.user_label
+            "user_label": int(request.user_label)
         })
 
         try:
@@ -105,7 +129,7 @@ class AnomalyDetectorRf(anomaly_pb2_grpc.AnomalyServiceServicer):
                 "amount_paid": request.amount_paid,
                 "delay_days": request.delay_days,
                 "paid_to_due_ratio": ratio,
-                "label": request.user_label
+                "label": int(request.user_label)
             }])
 
             if os.path.exists(self.csv_feedback_path):
@@ -117,6 +141,9 @@ class AnomalyDetectorRf(anomaly_pb2_grpc.AnomalyServiceServicer):
             all_data.to_csv(self.csv_feedback_path,index=False)
 
             self.model.fit(all_data[['amount_due','amount_paid','delay_days','paid_to_due_ratio']],all_data['label'])
+            timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%s')
+            versioning_path = os.path.join(self.model_dir,f'anomaly_model_rf{timestamp}.joblib')
+            joblib.dump(self.model,versioning_path)
             joblib.dump(self.model,self.model_path)
             print('Model re trained with new feedback')
         except Exception as e:
