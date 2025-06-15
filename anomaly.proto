@@ -1,0 +1,29 @@
+syntax = "proto3";
+
+service AnomalyService {
+  rpc Detect(AnomalyRequest) returns (AnomalyResponse);
+  rpc SubmitFeedback(FeedbackRequest) returns (FeedbackResponse);
+}
+
+message AnomalyRequest {
+  double amount_due = 1;
+  double amount_paid = 2;
+  int32 delay_days = 3;
+  double paid_to_due_ratio = 4;
+}
+
+message AnomalyResponse {
+  double anomaly_score = 1;
+  bool is_anomaly = 2;
+}
+
+message FeedbackRequest {
+  double amount_due = 1;
+  double amount_paid = 2;
+  int32 delay_days = 3;
+  int32 user_label = 4;
+}
+
+message FeedbackResponse {
+  string message=1;
+}

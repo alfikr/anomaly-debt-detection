@@ -1,0 +1,6 @@
+grpcio
+grpcio-tools
+joblib
+pandas
+scikit-learn
+redis

@@ -1,0 +1,3 @@
+amount_due,amount_paid,delay_days,paid_to_due_ratio,label
+0.0,10000.0,10,999.0,1
+100000.0,500000.0,0,5.0,1
